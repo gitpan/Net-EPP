@@ -20,7 +20,7 @@ for contact objects.
 	use Net::EPP::Frame::Command::Create::Contact;
 	use strict;
 
-	my $check = Net::EPP::Frame::Command::Create::Contact->new;
+	my $create = Net::EPP::Frame::Command::Create::Contact->new;
 	$create->setContact('contact-id);
 
 	print $create->toString(1);
@@ -99,7 +99,7 @@ sub setEmail {
 sub setAuthInfo {
 	my ($self, $authInfo) = @_;
 	my $el = $self->addEl('authInfo');
-	my $pw = $self->createElement('pw');
+	my $pw = $self->createElement('contact:pw');
 	$pw->appendText($authInfo);
 	$el->appendChild($pw);
 	return $el;
@@ -133,7 +133,7 @@ sub addPostalInfo {
 	}
 
 	$el->appendChild($nel);
-	$el->appendChild($oel);
+	$el->appendChild($oel) if $org;
 	$el->appendChild($ael);
 
 	return $el;

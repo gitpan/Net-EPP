@@ -22,11 +22,11 @@ our $Message	= '';
 
 =pod
 
-=head1 NAME
+=head1 Name
 
 Net::EPP::Simple - a simple EPP client interface for the most common jobs
 
-=head1 SYNOPSIS
+=head1 Synopsis
 
 	#!/usr/bin/perl
 	use Net::EPP::Simple;
@@ -49,7 +49,7 @@ Net::EPP::Simple - a simple EPP client interface for the most common jobs
 
 	}
 
-=head1 DESCRIPTION
+=head1 Description
 
 EPP is the Extensible Provisioning Protocol. EPP (defined in RFC 4930) is an
 application layer client-server protocol for the provisioning and management of
@@ -66,7 +66,7 @@ response frames behind a simple, Perlish interface.
 It is based on the C<Net::EPP::Client> module and uses C<Net::EPP::Frame>
 to build request frames.
 
-=head1 CONSTRUCTOR
+=head1 Constructor
 
 The constructor for C<Net::EPP::Simple> has the same general form as the
 one for C<Net::EPP::Client>, but with the following exceptions:
@@ -81,14 +81,114 @@ one for C<Net::EPP::Client>, but with the following exceptions:
 
 =item * The C<timeout> parameter controls how long the client waits for a response from the server before returning an error.
 
+=item * if C<debug> is set, C<Net::EPP::Simple> will output verbose debugging information on C<STDERR>, including all frames sent to and received from the server.
+
+=item * C<reconnect> can be used to disable automatic reconnection (it is enabled by default). Before sending a frame to the server, C<Net::EPP::Simple> will send a C<E<lt>helloE<gt>> to check that the connection is up, if not, it will try to reconnect, aborting after the I<n>th time, where I<n> is the value of C<reconnect> (the default is 3).
+
 =back
 
 The constructor will establish a connection to the server and retrieve the
-greeting (which is available via C<$epp-E<gt>{greeting}>) and then send a
-C<E<lt>loginE<gt>> request.
+greeting (which is available via $epp-E<gt>{greeting}) and then send a
+E<lt>loginE<gt> request.
 
 If the login fails, the constructor will return C<undef> and set
 C<$Net::EPP::Simple::Error> and C<$Net::EPP::Simple::Code>.
+
+=head2 Client and Server SSL options
+
+RFC 5730 requires that all EPP instances must be protected using "mutual,
+strong client-server authentication". In practice, this means that both
+client and server must present an SSL certificate, and that they must
+both verify the certificate of their peer.
+
+=head3 Server Certificate Verification
+
+C<Net::EPP::Simple> will verify the certificate presented by a server if
+the C<verify>, and either C<ca_file> or C<ca_path> are passed to the
+constructor:
+
+	my $epp = Net::EPP::Simple->new(
+		host	=> 'epp.nic.tld',
+		user	=> 'my-id',
+		pass	=> 'my-password',
+		verify	=> 1,
+		ca_file	=> '/etc/pki/tls/certs/ca-bundle.crt',
+		ca_path	=> '/etc/pki/tls/certs',
+	);
+
+C<Net::EPP::Simple> will fail to connect to the server if the
+certificate is not valid.
+
+=head3 SSL Cipher Selection
+
+You can restrict the ciphers that you will use to connect to the server
+by passing a C<ciphers> parameter to the constructor. This is a colon-
+separated list of cipher names and aliases. See L<http://www.openssl.org/docs/apps/ciphers.html#CIPHER_STRINGS>
+for further details. As an example, the following cipher list is
+suggested for clients who wish to ensure high-security connections to
+servers:
+
+	HIGH:!ADH:!MEDIUM:!LOW:!SSLv2:!EXP
+
+=head3 Client Certificates
+
+If you are connecting to an EPP server which requires a client
+certificate, you can configure C<Net::EPP::Simple> to use one as
+follows:
+
+	my $epp = Net::EPP::Simple->new(
+		host		=> 'epp.nic.tld',
+		user		=> 'my-id',
+		pass		=> 'my-password',
+		key		=> '/path/to/my.key',
+		cert		=> '/path/to/my.crt',
+		passphrase	=> 'foobar123',
+	);
+
+C<key> is the filename of the private key, C<cert> is the filename of
+the certificate. If the private key is encrypted, the C<passphrase>
+parameter will be used to decrypt it.
+
+=head2 Configuration File
+
+C<Net::EPP::Simple> supports the use of a simple configuration file. To 
+use this feature, you need to install the L<Config::Simple> module.
+
+When starting up, C<Net::EPP::Simple> will look for 
+C<$HOME/.net-epp-simple-rc>. This file is an ini-style configuration 
+file.
+
+=head3 Default Options
+
+You can specify default options for all EPP servers using the C<[default]>
+section:
+
+	[default]
+	default=epp.nic.tld
+	debug=1
+
+=head3 Server Specific Options
+
+You can specify options for for specific EPP servers by giving each EPP server
+its own section:
+
+	[epp.nic.tld]
+	user=abc123
+	pass=foo2bar
+	port=777
+	ssl=0
+
+This means that when you write a script that uses C<Net::EPP::Simple>, you can
+do the following:
+
+	# config file has a default server:
+	my $epp = Net::EPP::Simple->new;
+
+	# config file has connection options for this EPP server:
+	my $epp = Net::EPP:Simple->new('host' => 'epp.nic.tld');
+
+Any parameters provided to the constructor will override those in the config
+file.
 
 =cut
 
@@ -137,6 +237,13 @@ sub new {
 	$self->{authenticated}	= undef;
 	$self->{connect}	= (exists($params{connect}) ? $params{connect} : 1);
 	$self->{login}		= (exists($params{login}) ? $params{login} : 1);
+	$self->{key}		= $params{key};
+	$self->{cert}		= $params{cert};
+	$self->{key_passphrase}	= $params{key_passphrase};
+	$self->{verify}		= $params{verify};
+	$self->{ca_file}	= $params{ca_file};
+	$self->{ca_path}	= $params{ca_path};
+	$self->{ciphers}	= $params{ciphers};
 
 	bless($self, $package);
 
@@ -152,9 +259,27 @@ sub new {
 sub _connect {
 	my ($self, $login) = @_;
 
+	my %params;
+
+	$params{SSL_cipher_list} = $self->{ciphers} if (defined($self->{ssl}) && defined($self->{ciphers}));
+
+	if (defined($self->{key}) && defined($self->{cert}) && defined($self->{ssl})) {
+		$self->debug('configuring client certificate parameters');
+		$params{SSL_key_file}	= $self->{key};
+		$params{SSL_cert_file}	= $self->{cert};
+		$params{SSL_passwd_cb}	= sub { $self->{key_passphrase} };
+	}
+
+	if (defined($self->{ssl}) && defined($self->{verify})) {
+		$self->debug('configuring server verification');
+		$params{SSL_verify_mode}	= 0x01;
+		$params{SSL_ca_file}		= $self->{ca_file};
+		$params{SSL_ca_path}		= $self->{ca_path};
+	}
+
 	$self->debug(sprintf('Attempting to connect to %s:%d', $self->{host}, $self->{port}));
 	eval {
-		$self->{greeting} = $self->connect;
+		$self->{greeting} = $self->connect(%params);
 	};
 	if ($@ ne '' || ref($self->{greeting}) ne 'Net::EPP::Frame::Response') {
 		chomp($@);
@@ -198,10 +323,15 @@ sub _login {
 		$login->svcs->appendChild($el);
 	}
 	$objects = $self->{greeting}->getElementsByTagNameNS(EPP_XMLNS, 'extURI');
+	my $svcext;
+	if ($objects->size) {
+		$svcext = $login->createElement('svcExtension');
+		$login->svcs->appendChild($svcext);
+	}
 	while (my $object = $objects->shift) {
-		my $el = $login->createElement('objURI');
+		my $el = $login->createElement('extURI');
 		$el->appendText($object->firstChild->data);
-		$login->svcs->appendChild($el);
+		$svcext->appendChild($el);
 	}
 
 	$self->debug(sprintf("Attempting to login as client ID '%s'", $self->{user}));
@@ -332,7 +462,7 @@ error, these methods will return C<undef>, and you can then check
 C<$Net::EPP::Simple::Error> and C<$Net::EPP::Simple::Code>.
 
 If C<$authInfo> is defined, it will be sent to the server as per RFC
-4931, Section 3.1.2 and RRC 4933, Section 3.1.2. If the supplied
+5731, Section 3.1.2 and RFC 5733, Section 3.1.2. If the supplied
 authInfo code is validated by the registry, additional information will
 appear in the response. If it is invalid, you should get an error.
 
@@ -939,7 +1069,7 @@ sub create_domain {
 	$frame->setPeriod($domain->{'period'});
 	$frame->setRegistrant($domain->{'registrant'});
 	$frame->setContacts($domain->{'contacts'});
-	$frame->setNS(@{$domain->{'ns'}});
+	$frame->setNS(@{$domain->{'ns'}}) if $domain->{'ns'} and @{$domain->{'ns'}};
 
 	$frame->setAuthInfo($domain->{authInfo}) if ($domain->{authInfo} ne '');
 
@@ -974,10 +1104,6 @@ sub create_contact {
 	my $frame = Net::EPP::Frame::Command::Create::Contact->new;
 
 	$frame->setContact($contact->{id});
-	$frame->setEmail($contact->{email});
-	$frame->setVoice($contact->{voice}) if ($contact->{voice} ne '');
-	$frame->setFax($contact->{fax}) if ($contact->{fax} ne '');
-	$frame->setAuthInfo($contact->{authInfo}) if ($contact->{authInfo} ne '');
 
 	if (ref($contact->{postalInfo}) eq 'HASH') {
 		foreach my $type (keys(%{$contact->{postalInfo}})) {
@@ -989,6 +1115,11 @@ sub create_contact {
 			);
 		}
 	}
+
+	$frame->setVoice($contact->{voice}) if ($contact->{voice} ne '');
+	$frame->setFax($contact->{fax}) if ($contact->{fax} ne '');
+	$frame->setEmail($contact->{email});
+	$frame->setAuthInfo($contact->{authInfo}) if ($contact->{authInfo} ne '');
 
 	if (ref($contact->{status}) eq 'ARRAY') {
 		foreach my $status (grep { /^client/ } @{$contact->{status}}) {
@@ -1322,13 +1453,13 @@ parameters being passed to a method, or a network error) then this will
 be set to 2400 (C<COMMAND_FAILED>). See L<Net::EPP::ResponseCodes> for
 more information about thes codes.
 
-=head1 AUTHOR
+=head1 Author
 
 CentralNic Ltd (L<http://www.centralnic.com/>).
 
-=head1 COPYRIGHT
+=head1 Copyright
 
-This module is (c) 2007 CentralNic Ltd. This module is free software; you can
+This module is (c) 2011 CentralNic Ltd. This module is free software; you can
 redistribute it and/or modify it under the same terms as Perl itself.
 
 =head1 SEE ALSO
@@ -1341,9 +1472,9 @@ redistribute it and/or modify it under the same terms as Perl itself.
 
 =item * L<Net::EPP::Proxy>
 
-=item * RFCs 4930 and RFC 4934, available from L<http://www.ietf.org/>.
+=item * RFCs 5730 and RFC 4934, available from L<http://www.ietf.org/>.
 
-=item * The CentralNic EPP site at L<http://www.centralnic.com/resellers/epp>.
+=item * The CentralNic EPP site at L<http://www.centralnic.com/registrars/epp>.
 
 =back
 

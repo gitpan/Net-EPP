@@ -20,7 +20,7 @@ for domain objects.
 	use Net::EPP::Frame::Command::Create::Domain;
 	use strict;
 
-	my $check = Net::EPP::Frame::Command::Create::Domain->new;
+	my $create = Net::EPP::Frame::Command::Create::Domain->new;
 	$create->setDomain('example.uk.com);
 
 	print $create->toString(1);
@@ -202,7 +202,7 @@ sub addHostObjNS {
 sub setAuthInfo {
 	my ($self, $authInfo) = @_;
 	my $el = $self->addEl('authInfo');
-	my $pw = $self->createElement('pw');
+	my $pw = $self->createElement('domain:pw');
 	$pw->appendText($authInfo);
 	$el->appendChild($pw);
 	return $el;
