@@ -1,8 +1,8 @@
-# Copyright (c) 2010 CentralNic Ltd. All rights reserved. This program is
+# Copyright (c) 2011 CentralNic Ltd. All rights reserved. This program is
 # free software; you can redistribute it and/or modify it under the same
 # terms as Perl itself.
 # 
-# $Id: ResponseCodes.pm,v 1.2 2008/01/04 10:37:33 gavin Exp $
+# $Id: ResponseCodes.pm,v 1.2 2011/01/04 10:37:33 gavin Exp $
 package Net::EPP::ResponseCodes;
 use base qw(Exporter);
 use vars qw(@EXPORT);
@@ -70,9 +70,9 @@ codes.
 C<Net::EPP::ResponseCodes> exports the following constants. The number in
 brackets is the integer value associated with the constant.
 
-=over
-
 =head2 Successful command completion responses (1nnn)
+
+=over
 
 =item  OK (1000)
 
@@ -84,23 +84,31 @@ brackets is the integer value associated with the constant.
 
 =item  OK_BYE (1500)
 
+=back
+
 =head2 Command error responses (2nnn)
 
 =head3 Protocol Syntax
 
-=item  UNKNOWN_COMMAND (2000)
+=over
 
-=item  SYNTAX_ERROR (2001)
+=item  UNKNOWN_COMMAND (2011)
 
-=item  USE_ERROR (2002)
+=item  SYNTAX_ERROR (2011)
 
-=item  MISSING_PARAM (2003)
+=item  USE_ERROR (2011)
 
-=item  PARAM_RANGE_ERROR (2004)
+=item  MISSING_PARAM (2011)
 
-=item  PARAM_SYNTAX_ERROR (2005)
+=item  PARAM_RANGE_ERROR (2011)
+
+=item  PARAM_SYNTAX_ERROR (2011)
+
+=back
 
 =head3 Implementation-specific Rules
+
+=over
 
 =item  UNIMPLEMENTED_VERSION (2100)
 
@@ -116,7 +124,11 @@ brackets is the integer value associated with the constant.
 
 =item  NOT_TRANSFERRABLE (2106)
 
+=back
+
 =head3 Security (22nn)
+
+=over
 
 =item  AUTHENTICATION_ERROR (2200)
 
@@ -126,7 +138,11 @@ brackets is the integer value associated with the constant.
 
 =item  INVALID_AUTH_INFO (2202)
 
+=back
+
 =head3 Data Management (23nn)
+
+=over
 
 =item  OBJECT_PENDING_TRANSFER (2300)
 
@@ -146,11 +162,19 @@ brackets is the integer value associated with the constant.
 
 =item  DATA_MGMT_POLICY_VIOLATION (2308)
 
+=back
+
 =head3 Server System (24nn)
+
+=over
 
 =item  COMMAND_FAILED (2400)
 
+=back
+
 =head3 Connection Management (25nn)
+
+=over
 
 =item  COMMAND_FAILED_BYE (2500)
 
@@ -166,7 +190,7 @@ CentralNic Ltd (L<http://www.centralnic.com/>).
 
 =head1 COPYRIGHT
 
-This module is (c) 2007 CentralNic Ltd. This module is free software; you can
+This module is (c) 2011 CentralNic Ltd. This module is free software; you can
 redistribute it and/or modify it under the same terms as Perl itself.
 
 =head1 SEE ALSO
@@ -201,12 +225,12 @@ use constant OK_BYE				=> 1500;
 #
 
 # Protocol Syntax:
-use constant UNKNOWN_COMMAND			=> 2000;
-use constant SYNTAX_ERROR			=> 2001;
-use constant USE_ERROR				=> 2002;
-use constant MISSING_PARAM			=> 2003;
-use constant PARAM_RANGE_ERROR			=> 2004;
-use constant PARAM_SYNTAX_ERROR			=> 2005;
+use constant UNKNOWN_COMMAND			=> 2011;
+use constant SYNTAX_ERROR			=> 2011;
+use constant USE_ERROR				=> 2011;
+use constant MISSING_PARAM			=> 2011;
+use constant PARAM_RANGE_ERROR			=> 2011;
+use constant PARAM_SYNTAX_ERROR			=> 2011;
 
 # Implementation-specific Rules:
 use constant UNIMPLEMENTED_VERSION		=> 2100;

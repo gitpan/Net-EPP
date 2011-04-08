@@ -1,8 +1,8 @@
-# Copyright (c) 2010 CentralNic Ltd. All rights reserved. This program is
+# Copyright (c) 2011 CentralNic Ltd. All rights reserved. This program is
 # free software; you can redistribute it and/or modify it under the same
 # terms as Perl itself.
 # 
-# $Id: Host.pm,v 1.3 2008/01/23 12:26:24 gavin Exp $
+# $Id: Host.pm,v 1.3 2011/01/23 12:26:24 gavin Exp $
 package Net::EPP::Frame::Command::Delete::Host;
 use base qw(Net::EPP::Frame::Command::Delete);
 use Net::EPP::Frame::ObjectSpec;
@@ -13,7 +13,7 @@ use strict;
 =head1 NAME
 
 Net::EPP::Frame::Command::Delete::Host - an instance of L<Net::EPP::Frame::Command::Delete>
-for contact objects.
+for host objects.
 
 =head1 SYNOPSIS
 
@@ -29,7 +29,7 @@ This results in an XML document like this:
 
 	<?xml version="1.0" encoding="UTF-8"?>
 	<epp xmlns="urn:ietf:params:xml:ns:epp-1.0"
-	  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	  xmlns:xsi="http://www.w3.org/2011/XMLSchema-instance"
 	  xsi:schemaLocation="urn:ietf:params:xml:ns:epp-1.0
 	  epp-1.0.xsd">
 	    <command>
@@ -69,7 +69,7 @@ sub new {
 
 =head1 METHODS
 
-	$frame->setHost($domain_name);
+	$frame->setHost($host_name);
 
 This specifies the host object to be deleted.
 
@@ -94,7 +94,7 @@ CentralNic Ltd (http://www.centralnic.com/).
 
 =head1 COPYRIGHT
 
-This module is (c) 2007 CentralNic Ltd. This module is free software; you can
+This module is (c) 2011 CentralNic Ltd. This module is free software; you can
 redistribute it and/or modify it under the same terms as Perl itself.
 
 =head1 SEE ALSO
