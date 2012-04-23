@@ -1,4 +1,4 @@
-# Copyright (c) 2011 CentralNic Ltd. All rights reserved. This program is
+# Copyright (c) 2012 CentralNic Ltd. All rights reserved. This program is
 # free software; you can redistribute it and/or modify it under the same
 # terms as Perl itself.
 # 
@@ -62,7 +62,9 @@ sub new {
 
 	my $host = $self->addObject(Net::EPP::Frame::ObjectSpec->spec('host'));
 
-	foreach my $grp (qw(add rem chg)) {
+	# 'chg' element's contents are not optional for hosts, so we'll add
+	# this element only when we plan to use it (accessor is overriden)
+	foreach my $grp (qw(add rem)) {
 		my $el = $self->createElement(sprintf('host:%s', $grp));
 		$self->getNode('update')->getChildNodes->shift->appendChild($el);
 	}
@@ -86,10 +88,125 @@ sub setHost {
 	my $name = $self->createElement('host:name');
 	$name->appendText($host);
 
-	$self->getNode('update')->getChildNodes->shift->appendChild($name);
+	my $n = $self->getNode('update')->getChildNodes->shift;
+	$n->insertBefore($name, $n->firstChild);
 
 	return 1;
 }
+
+=pod
+
+	$frame->addStatus($type, $info);
+
+Add a status of $type with the optional extra $info.
+
+=cut
+
+sub addStatus {
+	my ($self, $type, $info) = @_;
+	my $status = $self->createElement('host:status');
+	$status->setAttribute('s', $type);
+	$status->setAttribute('lang', 'en');
+	if ($info) {
+		$status->appendText($info);
+	}
+	$self->getElementsByLocalName('host:add')->shift->appendChild($status);
+	return 1;
+}
+
+=pod
+
+	$frame->remStatus($type);
+
+Remove a status of $type.
+
+=cut
+
+sub remStatus {
+	my ($self, $type) = @_;
+	my $status = $self->createElement('host:status');
+	$status->setAttribute('s', $type);
+	$self->getElementsByLocalName('host:rem')->shift->appendChild($status);
+	return 1;
+}
+
+
+=pod
+
+	$frame->addAddr({ 'ip' => '10.0.0.1', 'version' => 'v4' });
+
+Add a set of IP addresses to the host object. EPP supports multiple
+addresses of different versions.
+
+=cut
+
+sub addAddr {
+	my ($self, @addr) = @_;
+
+	foreach my $ip (@addr) {
+		my $el = $self->createElement('host:addr');
+		$el->appendText($ip->{ip});
+		$el->setAttribute('ip', $ip->{version});
+		$self->getElementsByLocalName('host:add')->shift->appendChild($el);
+	}
+	return 1;
+}
+
+=pod
+
+	$frame->remAddr({ 'ip' => '10.0.0.2', 'version' => 'v4' });
+
+Remove a set of IP addresses from the host object. EPP supports multiple
+addresses of different versions.
+
+=cut
+
+sub remAddr {
+	my ($self, @addr) = @_;
+
+	foreach my $ip (@addr) {
+		my $el = $self->createElement('host:addr');
+		$el->appendText($ip->{ip});
+		$el->setAttribute('ip', $ip->{version});
+		$self->getElementsByLocalName('host:rem')->shift->appendChild($el);
+	}
+	return 1;
+}
+
+
+=pod
+	my $el = $frame->chg;
+
+Lazy-building of 'host:chg'element.
+
+=cut
+sub chg {
+	my $self = shift;
+
+	my $chg = $self->getElementsByLocalName('host:chg')->shift;
+	if ( $chg ) {
+		return $chg;
+	}
+	else {
+		my $el = $self->createElement('host:chg');
+		$self->getNode('update')->getChildNodes->shift->appendChild($el);
+		return $el;
+	}
+}
+
+=pod
+	$frame->chgName('ns2.example.com');
+
+Change a name of host.
+
+=cut
+sub chgName {
+	my ($self, $name) = @_;
+	my $el = $self->createElement('host:name');
+	$el->appendText($name);
+	$self->chg->appendChild($el);
+}
+
 
 =pod
 
@@ -99,7 +216,7 @@ CentralNic Ltd (http://www.centralnic.com/).
 
 =head1 COPYRIGHT
 
-This module is (c) 2011 CentralNic Ltd. This module is free software; you can
+This module is (c) 2012 CentralNic Ltd. This module is free software; you can
 redistribute it and/or modify it under the same terms as Perl itself.
 
 =head1 SEE ALSO

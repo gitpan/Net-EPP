@@ -1,4 +1,4 @@
-# Copyright (c) 2011 CentralNic Ltd. All rights reserved. This program is
+# Copyright (c) 2012 CentralNic Ltd. All rights reserved. This program is
 # free software; you can redistribute it and/or modify it under the same
 # terms as Perl itself.
 # 
@@ -11,13 +11,14 @@ use Net::EPP::ResponseCodes;
 use Time::HiRes qw(time);
 use base qw(Net::EPP::Client);
 use constant EPP_XMLNS	=> 'urn:ietf:params:xml:ns:epp-1.0';
-use vars qw($Error $Code $Message);
+use vars qw($Error $Code $Message @Log);
 use strict;
 use warnings;
 
 our $Error	= '';
 our $Code	= OK;
 our $Message	= '';
+our @Log	= ();
 
 =pod
 
@@ -197,32 +198,8 @@ sub new {
 	my ($package, %params) = @_;
 	$params{dom}		= 1;
 
-	eval 'use Config::Simple';
-	if (!$@) {
-		# we have Config::Simple, so let's try to parse the RC file:
-		my $rcfile = $ENV{'HOME'}.'/.net-epp-simple-rc';
-		if (-e $rcfile) {
-			my $config = Config::Simple->new($rcfile);
-
-			# if no host was defined in the constructor, use the default (if specified):
-			if (!defined($params{'host'}) && $config->param('default.default')) {
-				$params{'host'} = $config->param('default.default');
-			}
-
-			# if no debug level was defined in the constructor, use the default (if specified):
-			if (!defined($params{'debug'}) && $config->param('default.debug')) {
-				$params{'debug'} = $config->param('default.debug');
-			}
-
-			# grep through the file's values for settings for the selected host:
-			my %vars = $config->vars;
-			foreach my $key (grep { /^$params{'host'}\./ } keys(%vars)) {
-				my $value = $vars{$key};
-				$key =~ s/^$params{'host'}\.//;
-				$params{$key} = $value unless (defined($params{$key}));
-			}
-		}
-	}
+	my $load_config = (defined($params{load_config}) ? $params{load_config} : 1);
+	$package->_load_config(\%params) if ($load_config);
 
 	$params{port}		= (defined($params{port}) && int($params{port}) > 0 ? $params{port} : 700);
 	$params{ssl}		= ($params{no_ssl} ? undef : 1);
@@ -240,7 +217,7 @@ sub new {
 	$self->{login}		= (exists($params{login}) ? $params{login} : 1);
 	$self->{key}		= $params{key};
 	$self->{cert}		= $params{cert};
-	$self->{key_passphrase}	= $params{key_passphrase};
+	$self->{passphrase}	= $params{passphrase};
 	$self->{verify}		= $params{verify};
 	$self->{ca_file}	= $params{ca_file};
 	$self->{ca_path}	= $params{ca_path};
@@ -257,6 +234,37 @@ sub new {
 	}
 }
 
+sub _load_config {
+	my ($package, $params_ref) = @_;
+
+	eval 'use Config::Simple';
+	if (!$@) {
+		# we have Config::Simple, so let's try to parse the RC file:
+		my $rcfile = $ENV{'HOME'}.'/.net-epp-simple-rc';
+		if (-e $rcfile) {
+			my $config = Config::Simple->new($rcfile);
+
+			# if no host was defined in the constructor, use the default (if specified):
+			if (!defined($params_ref->{'host'}) && $config->param('default.default')) {
+				$params_ref->{'host'} = $config->param('default.default');
+			}
+
+			# if no debug level was defined in the constructor, use the default (if specified):
+			if (!defined($params_ref->{'debug'}) && $config->param('default.debug')) {
+				$params_ref->{'debug'} = $config->param('default.debug');
+			}
+
+			# grep through the file's values for settings for the selected host:
+			my %vars = $config->vars;
+			foreach my $key (grep { /^$params_ref->{'host'}\./ } keys(%vars)) {
+				my $value = $vars{$key};
+				$key =~ s/^$params_ref->{'host'}\.//;
+				$params_ref->{$key} = $value unless (defined($params_ref->{$key}));
+			}
+		}
+	}
+}
+
 sub _connect {
 	my ($self, $login) = @_;
 
@@ -268,7 +276,7 @@ sub _connect {
 		$self->debug('configuring client certificate parameters');
 		$params{SSL_key_file}	= $self->{key};
 		$params{SSL_cert_file}	= $self->{cert};
-		$params{SSL_passwd_cb}	= sub { $self->{key_passphrase} };
+		$params{SSL_passwd_cb}	= sub { $self->{passphrase} };
 	}
 
 	if (defined($self->{ssl}) && defined($self->{verify})) {
@@ -280,24 +288,37 @@ sub _connect {
 
 	$self->debug(sprintf('Attempting to connect to %s:%d', $self->{host}, $self->{port}));
 	eval {
-		$self->{greeting} = $self->connect(%params);
+		$params{no_greeting} = 1;
+		$self->connect(%params);
 	};
-	if ($@ ne '' || ref($self->{greeting}) ne 'Net::EPP::Frame::Response') {
+	if ($@ ne '') {
 		chomp($@);
 		$@ =~ s/ at .+ line .+$//;
 		$self->debug($@);
 		$Code = COMMAND_FAILED;
-		$Error = $Message = $@;
+		$Error = $Message = "Error connecting: ".$@;
 		return undef;
+
+	} else {
+		$self->debug('Connected OK, retrieving greeting frame');
+		$self->{greeting} = $self->get_frame;
+		if (ref($self->{greeting}) ne 'Net::EPP::Frame::Response') {
+			$Code = COMMAND_FAILED;
+			$Error = $Message = "Error retrieving greeting: ".$@;
+			return undef;
+
+		} else {
+			$self->debug('greeting frame retrieved OK');
+
+		}
 	}
 
 	$self->{connected} = 1;
 
 	map { $self->debug('S: '.$_) } split(/\n/, $self->{greeting}->toString(1));
 
-	$self->debug('Connected OK');
-
 	if ($login) {
+		$self->debug('attempting login');
 		return $self->_login;
 
 	} else {
@@ -307,6 +328,34 @@ sub _connect {
 }
 
 sub _login {
+	my $self = shift;
+
+	$self->debug(sprintf("Attempting to login as client ID '%s'", $self->{user}));
+	my $response = $self->request( $self->_prepare_login_frame() );
+
+	if (!$response) {
+		$Error = $Message = "Error getting response to login request: ".$Error;
+		return undef;
+
+	} else {
+		$Code = $self->_get_response_code($response);
+		$Message = $self->_get_message($response);
+
+		$self->debug(sprintf('%04d: %s', $Code, $Message));
+
+		if ($Code > 1999) {
+			$Error = "Error logging in (response code $Code)";
+			return undef;
+
+		} else {
+			$self->{authenticated} = 1;
+			return 1;
+
+		}
+	}
+}
+
+sub _prepare_login_frame {
 	my $self = shift;
 
 	$self->debug('preparing login frame');
@@ -334,25 +383,7 @@ sub _login {
 		$el->appendText($object->firstChild->data);
 		$svcext->appendChild($el);
 	}
-
-	$self->debug(sprintf("Attempting to login as client ID '%s'", $self->{user}));
-	my $response = $self->request($login);
-
-	$Code = $self->_get_response_code($response);
-	$Message = $self->_get_message($response);
-
-	$self->debug(sprintf('%04d: %s', $Code, $Message));
-
-	if ($Code > 1999) {
-		$Error = "Error logging in (response code $Code)";
-		return undef;
-
-	} else {
-		$self->{authenticated} = 1;
-
-	}
-
-	return 1;
+	return $login;
 }
 
 =pod
@@ -427,7 +458,7 @@ sub _check {
 		$Message = $self->_get_message($response);
 
 		if ($Code > 1999) {
-			$Error = sprintf("Server returned a %d code", $Code);
+			$Error = $self->_get_error_message($response);
 			return undef;
 
 		} else {
@@ -559,23 +590,32 @@ sub _info {
 		$Message = $self->_get_message($response);
 
 		if ($Code > 1999) {
-			$Error = sprintf("Server returned a %d code", $Code);
+			$Error = $self->_get_error_message($response);
 			return undef;
 
 		} else {
-			my $infData = $response->getNode((Net::EPP::Frame::ObjectSpec->spec($type))[1], 'infData');
-
-			if ($type eq 'domain') {
-				return $self->_domain_infData_to_hash($infData);
-
-			} elsif ($type eq 'contact') {
-				return $self->_contact_infData_to_hash($infData);
-
-			} elsif ($type eq 'host') {
-				return $self->_host_infData_to_hash($infData);
-
-			}
+			return $self->parse_object_info($type, $response);
 		}
+	}
+}
+
+# An easy-to-subclass method for parsing object info
+sub parse_object_info {
+	my ($self, $type, $response) = @_;
+
+	my $infData = $response->getNode((Net::EPP::Frame::ObjectSpec->spec($type))[1], 'infData');
+
+	if ($type eq 'domain') {
+		return $self->_domain_infData_to_hash($infData);
+
+	} elsif ($type eq 'contact') {
+		return $self->_contact_infData_to_hash($infData);
+
+	} elsif ($type eq 'host') {
+		return $self->_host_infData_to_hash($infData);
+	} else {
+		$Error = "Unknown object type '$type'";
+		return undef;
 	}
 }
 
@@ -1046,9 +1086,9 @@ When creating a new domain object, you may also specify a C<period> key, like so
 	    'admin' => 'contact-id',
 	    'billing' => 'contact-id',
 	  },
-	  'status' => {
+	  'status' => [
 	    'clientTransferProhibited',
-	  }
+	  ],
 	  'ns' => {
 	    'ns0.example.com',
 	    'ns1.example.com',
@@ -1065,45 +1105,72 @@ assumes the registry uses the host object model rather than the host attribute m
 sub create_domain {
 	my ($self, $domain) = @_;
 
-	print Data::Dumper::Dumper($domain);
+	return $self->_get_response_result(
+		$self->_request(
+			$self->_prepare_create_domain_frame($domain)
+		)
+	);
+}
+
+sub _prepare_create_domain_frame {
+	my ($self, $domain) = @_;
 
 	my $frame = Net::EPP::Frame::Command::Create::Domain->new;
 	$frame->setDomain($domain->{'name'});
 	$frame->setPeriod($domain->{'period'});
+	$frame->setNS(@{$domain->{'ns'}}) if $domain->{'ns'} and @{$domain->{'ns'}};
 	$frame->setRegistrant($domain->{'registrant'});
 	$frame->setContacts($domain->{'contacts'});
-	$frame->setNS(@{$domain->{'ns'}}) if $domain->{'ns'} and @{$domain->{'ns'}};
-
 	$frame->setAuthInfo($domain->{authInfo}) if ($domain->{authInfo} ne '');
-
-	my $response = $self->_request($frame);
-
-
-	if (!$response) {
-		return undef;
-
-	} else {
-		$Code = $self->_get_response_code($response);
-		$Message = $self->_get_message($response);
-
-		if ($Code > 1999) {
-			$Error = $response->msg;
-			return undef;
-
-		} else {
-			return 1;
-
-		}
-	}
+	return $frame;
 }
+
+=head2 Creating Hosts
+
+    my $host = {
+        name  => 'ns1.example.tld',
+        addrs => [
+            { ip => '123.45.67.89', version => 'v4' },
+            { ip => '98.76.54.32',  version => 'v4' },
+        ],
+    };
+    $epp->create_host($host);
+
+=cut
 
 sub create_host {
 	my ($self, $host) = @_;
-	croak("Unfinished method create_host()");
+
+	return $self->_get_response_result(
+		$self->_request(
+			$self->_prepare_create_host_frame($host)
+		)
+	);
+}
+
+sub _prepare_create_host_frame {
+	my ($self, $host) = @_;
+
+	my $frame = Net::EPP::Frame::Command::Create::Host->new;
+	$frame->setHost($host->{name});
+	$frame->setAddr(@{$host->{addrs}});
+	return $frame;
 }
 
 sub create_contact {
 	my ($self, $contact) = @_;
+
+	return $self->_get_response_result(
+		$self->_request(
+			$self->_prepare_create_contact_frame($contact)
+		)
+	);
+}
+
+
+sub _prepare_create_contact_frame {
+	my ($self, $contact) = @_;
+
 	my $frame = Net::EPP::Frame::Command::Create::Contact->new;
 
 	$frame->setContact($contact->{id});
@@ -1129,41 +1196,416 @@ sub create_contact {
 			$frame->appendStatus($status);
 		}
 	}
-
-	my $response = $self->_request($frame);
-
-	if (!$response) {
-		return undef;
-
-	} else {
-		$Code = $self->_get_response_code($response);
-		$Message = $self->_get_message($response);
-
-		if ($Code > 1999) {
-			$Error = $response->msg;
-			return undef;
-
-		} else {
-			return 1;
-
-		}
-	}
+	return $frame;
 }
+
+
+# Process response code and return result
+sub _get_response_result {
+	my ($self, $response) = @_;
+
+	return undef if !$response;
+
+	# If there was a response...
+	$Code    = $self->_get_response_code($response);
+	$Message = $self->_get_message($response);
+	if ($Code > 1999) {
+		$Error = $response->msg;
+		return undef;
+	}
+	return 1;
+}
+
+
+=head1 Updating Objects
+
+The following methods can be used to update an object at the server:
+
+	$epp->update_domain($domain);
+	$epp->update_host($host);
+	$epp->update_contact($contact);
+
+Each of these methods has the same profile. They will return one of the following:
+
+=over
+
+=item * undef in the case of an error (check C<$Net::EPP::Simple::Error> and C<$Net::EPP::Simple::Code>).
+
+=item * 1 if the update request was accepted.
+
+=back
+
+You may wish to check the value of $Net::EPP::Simple::Code to determine whether the response code was 1000 (OK) or 1001 (action pending).
+
+=cut
+
+
+=head2 Updating Domains
+
+Use update_domain() method to update domains' data.
+
+The update info parameter may look like:
+$update_info = {
+    name => $domain,
+    chg  => {
+        registrant => $new_registrant_id,
+        authInfo   => $new_domain_password,
+    },
+    add => {
+        # DNS info with "hostObj" or "hostAttr" model, see create_domain()
+        ns       => [ ns1.example.com ns2.example.com ],
+        contacts => {
+            tech    => 'contact-id',
+            billing => 'contact-id',
+            admin   => 'contact-id',
+        },
+
+        # Status info, simple form:
+        status => [ qw/ clientUpdateProhibited clientHold / ],
+
+        # Status info may be in more detailed form:
+        # status => {
+        #    clientUpdateProbhibited  => 'Avoid accidental change',
+        #    clientHold               => 'This domain is not delegated',
+        # },
+    },
+    rem => {
+        ns       => [ ... ],
+        contacts => {
+            tech    => 'old_tech_id',
+            billing => 'old_billing_id',
+            admin   => 'old_admin_id',
+        },
+        status => [ qw/ clientTransferProhibited ... / ],
+    },
+}
+
+All fields except 'name' in $update_info hash are optional.
+
+=cut
 
 sub update_domain {
 	my ($self, $domain) = @_;
-	croak("Unfinished method update_domain()");
+	return $self->_update('domain', $domain);
 }
 
-sub update_host {
-	my ($self, $domain) = @_;
-	croak("Unfinished method update_host()");
+=head2 Updating Contacts
+
+Use update_contact() method to update contact's data.
+
+The $update_info for contacts may look like this:
+
+$update_info = {
+    id  => $contact_id,
+    add => {
+        status => [ qw/ clientDeleteProhibited / ],
+        # OR
+        # status => {
+        #    clientDeleteProhibited  => 'Avoid accidental removal',
+        # },
+    },
+    rem => {
+        status => [ qw/ clientUpdateProhibited / ],
+    },
+    chg => {
+        postalInfo => {
+            int => {
+                  name => 'John Doe',
+                  org => 'Example Inc.',
+                  addr => {
+                    street => [
+                      '123 Example Dr.'
+                      'Suite 100'
+                    ],
+                    city => 'Dulles',
+                    sp => 'VA',
+                    pc => '20116-6503'
+                    cc => 'US',
+              },
+            },
+        },
+        voice => '+1.7035555555x1234',
+        fax   => '+1.7035555556',
+        email => 'jdoe@example.com',
+        authInfo => 'new-contact-password',
+    },
 }
+
+All fields except 'id' in $update_info hash are optional.
+
+=cut
 
 sub update_contact {
-	my ($self, $domain) = @_;
-	croak("Unfinished method update_contact()");
+	my ($self, $contact) = @_;
+	return $self->_update('contact', $contact);
 }
+
+=head2 Updating Hosts
+
+Use update_host() method to update EPP hosts.
+
+The $update_info for hosts may look like this:
+
+$update_info = {
+    name => 'ns1.example.com',
+    add  => {
+        status => [ qw/ clientDeleteProhibited / ],
+        # OR
+        # status => {
+        #    clientDeleteProhibited  => 'Avoid accidental removal',
+        # },
+
+        addrs  => [
+            { ip => '123.45.67.89', version => 'v4' },
+            { ip => '98.76.54.32',  version => 'v4' },
+        ],
+    },
+    rem => {
+        status => [ qw/ clientUpdateProhibited / ],
+        addrs  => [
+            { ip => '1.2.3.4', version => 'v4' },
+            { ip => '5.6.7.8', version => 'v4' },
+        ],
+    },
+    chg => {
+        name => 'ns2.example.com',
+    },
+}
+
+All fields except first 'name' in $update_info hash are optional.
+
+=cut
+
+sub update_host {
+	my ($self, $host) = @_;
+	return $self->_update('host', $host);
+}
+
+
+# Update domain/contact/host information
+sub _update {
+	my ($self, $type, $info) = @_;
+
+	my %frame_generator = (
+		'domain'  => \&_generate_update_domain_frame,
+		'contact' => \&_generate_update_contact_frame,
+		'host'	  => \&_generate_update_host_frame,
+	);
+
+	if ( !exists $frame_generator{$type} ) {
+		$Error = "Unknown object type: '$type'";
+		return undef;
+	}
+
+	my $generator = $frame_generator{$type};
+	my $frame     = $self->$generator($info);
+	return $self->_get_response_result( $self->request($frame) );
+}
+
+
+sub _generate_update_domain_frame {
+	my ($self, $info) = @_;
+
+	my $frame = Net::EPP::Frame::Command::Update::Domain->new;
+	$frame->setDomain( $info->{name} );
+
+	# 'add' element
+	if ( exists $info->{add} && ref $info->{add} eq 'HASH' ) {
+
+		my $add = $info->{add};
+
+		# Add DNS
+		if ( exists $add->{ns} && ref $add->{ns} eq 'ARRAY' ) {
+			$frame->addNS( @{ $add->{ns} } );
+		}
+
+		# Add contacts
+		if ( exists $add->{contacts} && ref $add->{contacts} eq 'HASH' ) {
+
+			my $contacts = $add->{contacts};
+			foreach my $type ( keys %{ $contacts } ) {
+				$frame->addContact( $type, $contacts->{$type} );
+			}
+		}
+
+		# Add status info
+		if ( exists $add->{status} && ref $add->{status} ) {
+			if ( ref $add->{status} eq 'HASH' ) {
+				while ( my ($type, $info) = each %{ $add->{status} } ) {
+					$frame->addStatus($type, $info);
+				}
+			}
+			elsif ( ref $add->{status} eq 'ARRAY' ) {
+				$frame->addStatus($_) for @{ $add->{status} };
+			}
+		}
+	}
+
+	# 'rem' element
+	if ( exists $info->{rem} && ref $info->{rem} eq 'HASH' ) {
+
+		my $rem = $info->{rem};
+
+		# DNS
+		if ( exists $rem->{ns} && ref $rem->{ns} eq 'ARRAY' ) {
+			$frame->remNS( @{ $rem->{ns} } );
+		}
+
+		# Contacts
+		if ( exists $rem->{contacts} && ref $rem->{contacts} eq 'HASH' ) {
+			my $contacts = $rem->{contacts};
+
+			foreach my $type ( keys %{ $contacts } ) {
+				$frame->remContact( $type, $contacts->{$type} );
+			}
+		}
+
+		# Status info
+		if ( exists $rem->{status} && ref $rem->{status} eq 'ARRAY' ) {
+			$frame->remStatus($_) for @{ $rem->{status} };
+		}
+	}
+
+	# 'chg' element
+	if ( exists $info->{chg} && ref $info->{chg} eq 'HASH' ) {
+
+		my $chg	= $info->{chg};
+
+		if ( defined $chg->{registrant} ) {
+			$frame->chgRegistrant( $chg->{registrant} );
+		}
+
+		if ( defined $chg->{authInfo} ) {
+			$frame->chgAuthInfo( $chg->{authInfo} );
+		}
+	}
+
+	return $frame;
+}
+
+
+sub _generate_update_contact_frame {
+	my ($self, $info) = @_;
+
+	my $frame = Net::EPP::Frame::Command::Update::Contact->new;
+	$frame->setContact( $info->{id} );
+
+	# Add
+	if ( exists $info->{add} && ref $info->{add} eq 'HASH' ) {
+		my $add = $info->{add};
+
+		if ( exists $add->{status} && ref $add->{status} ) {
+			if ( ref $add->{status} eq 'HASH' ) {
+				while ( my ($type, $info) = each %{ $add->{status} } ) {
+					$frame->addStatus($type, $info);
+				}
+			}
+			elsif ( ref $add->{status} eq 'ARRAY' ) {
+				$frame->addStatus($_) for @{ $add->{status} };
+			}
+		}
+	}
+
+	# Remove
+	if ( exists $info->{rem} && ref $info->{rem} eq 'HASH' ) {
+
+		my $rem = $info->{rem};
+
+		if ( exists $rem->{status} && ref $rem->{status} eq 'ARRAY' ) {
+			$frame->remStatus($_) for @{ $rem->{status} };
+		}
+	}
+
+	# Change
+	if ( exists $info->{chg} && ref $info->{chg} eq 'HASH' ) {
+
+		my $chg	= $info->{chg};
+
+		# Change postal info
+		if ( ref $chg->{postalInfo} eq 'HASH' ) {
+			foreach my $type ( keys %{ $chg->{postalInfo} } ) {
+				$frame->chgPostalInfo(
+					$type,
+					$chg->{postalInfo}->{$type}->{name},
+					$chg->{postalInfo}->{$type}->{org},
+					$chg->{postalInfo}->{$type}->{addr}
+				);
+			}
+		}
+
+		# Change voice / fax / email
+		for my $contact_type ( qw/ voice fax email / ) {
+			if ( defined $chg->{$contact_type} ) {
+				my $el = $frame->createElement("contact:$contact_type");
+				$el->appendText( $chg->{$contact_type} );
+				$frame->chg->appendChild($el);
+			}
+		}
+
+		# Change auth info
+		if ( $chg->{authInfo} ) {
+			$frame->chgAuthInfo( $chg->{authInfo} );
+		}
+
+		# 'disclose' option is still unimplemented
+	}
+
+	return $frame;
+}
+
+sub _generate_update_host_frame {
+	my ($self, $info) = @_;
+
+	my $frame = Net::EPP::Frame::Command::Update::Host->new;
+	$frame->setHost($info->{name});
+
+	if ( exists $info->{add} && ref $info->{add} eq 'HASH' ) {
+		my $add = $info->{add};
+		# Process addresses
+		if ( exists $add->{addrs} && ref $add->{addrs} eq 'ARRAY' ) {
+			$frame->addAddr( @{ $add->{addrs} } );
+		}
+		# Process statuses
+		if ( exists $add->{status} && ref $add->{status} ) {
+			if ( ref $add->{status} eq 'HASH' ) {
+				while ( my ($type, $info) = each %{ $add->{status} } ) {
+					$frame->addStatus($type, $info);
+				}
+			}
+			elsif ( ref $add->{status} eq 'ARRAY' ) {
+				$frame->addStatus($_) for @{ $add->{status} };
+			}
+		}
+	}
+
+	if ( exists $info->{rem} && ref $info->{rem} eq 'HASH' ) {
+		my $rem = $info->{rem};
+		# Process addresses
+		if ( exists $rem->{addrs} && ref $rem->{addrs} eq 'ARRAY' ) {
+			$frame->remAddr( @{ $rem->{addrs} } );
+		}
+		# Process statuses
+		if ( exists $rem->{status} && ref $rem->{status} ) {
+			if ( ref $rem->{status} eq 'HASH' ) {
+				while ( my ($type, $info) = each %{ $rem->{status} } ) {
+					$frame->remStatus($type, $info);
+				}
+			}
+			elsif ( ref $rem->{status} eq 'ARRAY' ) {
+				$frame->remStatus($_) for @{ $rem->{status} };
+			}
+		}
+	}
+
+	if ( exists $info->{chg} && ref $info->{chg} eq 'HASH' ) {
+		if ( $info->{chg}->{name} ) {
+			$frame->chgName( $info->{chg}->{name} );
+		}
+	}
+
+	return $frame;
+}
+
 
 =pod
 
@@ -1236,7 +1678,7 @@ sub _delete {
 		$Message = $self->_get_message($response);
 
 		if ($Code > 1999) {
-			$Error = sprintf("Server returned a %d code", $Code);
+			$Error = $self->_get_error_message($response);
 			return undef;
 
 		} else {
@@ -1244,6 +1686,44 @@ sub _delete {
 
 		}
 	}
+}
+
+=head1 Domain Renewal
+
+You can extend the validity period of the domain object by issuing a
+renew_domain() command.
+
+ my $result = $epp->renew_domain({
+     name         => 'example.com',
+     cur_exp_date => '2011-02-05',  # current expiration date
+     period       => 2,             # prolongation period in years
+ });
+
+Return value is C<1> on success and C<undef> on error.
+In the case of error C<$Net::EPP::Simple::Error> contains the appropriate
+error message.
+
+=cut
+
+sub renew_domain {
+	my ($self, $info) = @_;
+
+	return $self->_get_response_result(
+		$self->request(
+			$self->_generate_renew_domain_frame($info)
+		)
+	);
+}
+
+sub _generate_renew_domain_frame {
+	my ($self, $info) = @_;
+
+	my $frame = Net::EPP::Frame::Command::Renew::Domain->new;
+	$frame->setDomain( $info->{name} );
+	$frame->setCurExpDate( $info->{cur_exp_date} );
+	$frame->setPeriod( $info->{period} ) if $info->{period};
+
+	return $frame;
 }
 
 =pod
@@ -1267,6 +1747,15 @@ Returns the a C<Net::EPP::Frame::Greeting> object representing the greeting retu
 =cut
 
 sub greeting { $_[0]->{greeting} }
+
+=pod
+
+	$epp->ping;
+
+Checks that the connection is up by sending a C<E<lt>helloE<gt>> to the server. Returns false if no
+response is received.
+
+=cut
 
 sub ping {
 	my $self = shift;
@@ -1364,7 +1853,7 @@ sub get_frame {
 	my $frame;
 	$self->debug(sprintf('reading frame, waiting %d seconds before timeout', $self->{timeout}));
 	eval {
-		local $SIG{ALRM} = sub { die "alarm\n" };
+		local $SIG{ALRM} = sub { die 'timeout' };
 		$self->debug('setting timeout alarm for receiving frame');
 		alarm($self->{timeout});
 		$frame = $self->SUPER::get_frame();
@@ -1372,16 +1861,44 @@ sub get_frame {
 		alarm(0);
 	};
 	if ($@ ne '') {
-		$self->debug('unsetting timeout alarm after alarm was triggered');
+		chomp($@);
+		$@ =~ s/ at .+ line .+$//;
+		$self->debug("unsetting timeout alarm after alarm was triggered ($@)");
 		alarm(0);
 		$Code = COMMAND_FAILED;
-		$Error = $Message = "get_frame() timed out\n";
+		if ($@ =~ /^timeout/) {
+			$Error = $Message = "get_frame() timed out after $self->{timeout} seconds";
+
+		} else {
+			$Error = $Message = "get_frame() received an error: $@";
+
+		}
 		return undef;
 
 	} else {
 		return bless($frame, 'Net::EPP::Frame::Response');
 
 	}
+}
+
+# Get details error description including code, message and reason
+sub _get_error_message {
+	my ($self, $doc) = @_;
+
+	my $code    = $self->_get_response_code($doc);
+	my $error   = "Error $code";
+
+	my $message = $self->_get_message($doc);
+	if ( $message ) {
+		$error .= ": $message";
+	}
+
+	my $reason  = $self->_get_reason($doc);
+	if ( $reason ) {
+		$error .= " ($reason)";
+	}
+
+	return $error;
 }
 
 sub _get_response_code {
@@ -1408,6 +1925,18 @@ sub _get_message {
 	return '';
 }
 
+sub _get_reason {
+	my ($self, $doc) = @_;
+	my $reasons = $doc->getElementsByTagNameNS(EPP_XMLNS, 'reason');
+	if (defined($reasons)) {
+		my $reason = $reasons->shift;
+		if (defined($reason)) {
+			return $reason->textContent;
+		}
+	}
+        return '';
+}
+
 sub logout {
 	my $self = shift;
 	if (defined($self->{authenticated}) && 1 == $self->{authenticated}) {
@@ -1429,7 +1958,9 @@ sub DESTROY {
 
 sub debug {
 	my ($self, $msg) = @_;
-	printf(STDERR "%s (%d): %s\n", scalar(localtime()), $$, $msg) if (defined($self->{debug}) && $self->{debug} == 1);
+	my $log = sprintf("%s (%d): %s", scalar(localtime()), $$, $msg);
+	push(@Log, $log);
+	print STDERR $log."\n" if (defined($self->{debug}) && $self->{debug} == 1);
 }
 
 =pod
@@ -1464,7 +1995,7 @@ CentralNic Ltd (L<http://www.centralnic.com/>).
 
 =head1 Copyright
 
-This module is (c) 2011 CentralNic Ltd. This module is free software; you can
+This module is (c) 2012 CentralNic Ltd. This module is free software; you can
 redistribute it and/or modify it under the same terms as Perl itself.
 
 =head1 SEE ALSO
